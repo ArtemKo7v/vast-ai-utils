@@ -10,7 +10,9 @@ async function main() {
     rented: { eq: false },
     verified: { eq: true },
 
-    num_gpus: { eq: 1 }
+    num_gpus: { eq: 1 },
+    cpu_ram: { gt: 60000 }
+    gpu_ram: { gt: 20000 }
   };
 
   const offers = await vastaiSearchOffers(searchParams);
