@@ -14,6 +14,8 @@ const instanceCache = {
   lastError: null,
 };
 
+const subscribedChatIds = new Set();
+
 if (!BOT_TOKEN || BOT_TOKEN.includes('PUT_YOUR')) {
   console.error('Set BOT_TOKEN env var (BOT_TOKEN=123:ABC).');
   process.exit(1);
@@ -38,6 +40,8 @@ bot.on('message', async (msg) => {
     await bot.sendMessage(chatId, `User ID ${userId ?? 'unknown'} is not allowed.`);
     return;
   }
+
+  rememberChat(chatId);
 
   if (text === '/start') {
     await bot.sendMessage(chatId, 'Hi!\n\nType /help to see available commands.');
@@ -86,19 +90,64 @@ bot.on('callback_query', async (query) => {
     return;
   }
 
+  rememberChat(chatId);
   await bot.answerCallbackQuery(callbackId, { text: `Unknown action: ${data}` });
 });
 
 async function refreshInstanceCache() {
+  const previousInstances = instanceCache.instances;
+  const hadPreviousSnapshot = instanceCache.lastUpdatedAt !== null;
+
   try {
     const instances = await vastaiShowInstances();
 
     instanceCache.instances = Array.isArray(instances) ? instances : [];
     instanceCache.lastUpdatedAt = new Date();
     instanceCache.lastError = null;
+
+    if (hadPreviousSnapshot) {
+      await notifyStatusChanges(previousInstances, instanceCache.instances);
+    }
   } catch (error) {
     instanceCache.lastError = error instanceof Error ? error.message : String(error);
     console.error('Failed to refresh instance cache:', error);
+  }
+}
+
+async function notifyStatusChanges(previousInstances, currentInstances) {
+  if (subscribedChatIds.size === 0) {
+    return;
+  }
+
+  const previousById = new Map(previousInstances.map((instance) => [String(instance.id), instance]));
+
+  for (const instance of currentInstances) {
+    const instanceId = String(instance.id ?? '');
+    const previousInstance = previousById.get(instanceId);
+
+    if (!previousInstance) {
+      continue;
+    }
+
+    const previousStatus = getDisplayStatus(previousInstance);
+    const currentStatus = getDisplayStatus(instance);
+
+    if (previousStatus === currentStatus) {
+      continue;
+    }
+
+    const message = buildStatusChangeMessage(instance, previousStatus, currentStatus);
+    await broadcastMessage(message, { parse_mode: 'Markdown' });
+  }
+}
+
+async function broadcastMessage(text, options = {}) {
+  for (const chatId of subscribedChatIds) {
+    try {
+      await bot.sendMessage(chatId, text, options);
+    } catch (error) {
+      console.error(`Failed to send message to chat ${chatId}:`, error.message || error);
+    }
   }
 }
 
@@ -106,6 +155,10 @@ void refreshInstanceCache();
 setInterval(() => {
   void refreshInstanceCache();
 }, INSTANCE_REFRESH_INTERVAL_MS);
+
+function rememberChat(chatId) {
+  subscribedChatIds.add(chatId);
+}
 
 function parseAllowedUserIds(value) {
   return new Set(
@@ -143,6 +196,7 @@ function buildStatusMessage() {
   const cacheStatus = instanceCache.lastUpdatedAt
     ? `instances cached: ${instanceCache.instances.length}, updated at ${formatDateTime(instanceCache.lastUpdatedAt)}`
     : 'instance cache is not initialized yet';
+  const subscribedChatsStatus = `notification chats: ${subscribedChatIds.size}`;
 
   return [
     'Bot status',
@@ -150,7 +204,8 @@ function buildStatusMessage() {
     '',
     'Vast AI Status:',
     apiStatus,
-    cacheStatus
+    cacheStatus,
+    subscribedChatsStatus
   ].join('\n');
 }
 
@@ -200,6 +255,18 @@ function buildInstancesMessage(cache) {
   }
 
   return lines.join('\n');
+}
+
+function buildStatusChangeMessage(instance, previousStatus, currentStatus) {
+  const id = instance.id ?? 'unknown';
+  const label = escapeMarkdown(instance.label || instance.template_name || instance.gpu_name || 'Unnamed instance');
+  const countryFlag = getCountryFlag(instance.country_code);
+
+  return [
+    '*Instance status changed*',
+    `${countryFlag} #${id} ${label}`,
+    `_${escapeMarkdown(previousStatus)} -> ${escapeMarkdown(currentStatus)}_`,
+  ].join('\n');
 }
 
 function formatInstanceLines(instance) {
