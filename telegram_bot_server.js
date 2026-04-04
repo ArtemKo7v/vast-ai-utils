@@ -208,9 +208,10 @@ function formatInstanceLines(instance) {
   const host = escapeMarkdown(instance.public_ipaddr || instance.ssh_host || 'n/a');
   const displayStatus = escapeMarkdown(getDisplayStatus(instance));
   const gpuName = escapeMarkdown(instance.gpu_name || 'unknown');
+  const countryFlag = getCountryFlag(instance.country_code);
 
   return [
-    `#${id} ${label}`,
+    `${countryFlag} #${id} ${label}`,
     `Status: ${displayStatus}`,
     `GPU: ${gpuName} x${instance.num_gpus ?? '?'}`,
     `Host: ${host}`,
@@ -292,6 +293,18 @@ function getDisplayStatus(instance) {
   }
 
   return actualStatus || currentState || intendedStatus || nextState || 'Offline';
+}
+
+function getCountryFlag(countryCode) {
+  const normalizedCode = String(countryCode || '').trim().toUpperCase();
+
+  if (!/^[A-Z]{2}$/.test(normalizedCode)) {
+    return '🏳️';
+  }
+
+  return String.fromCodePoint(
+    ...normalizedCode.split('').map((char) => 127397 + char.charCodeAt(0))
+  );
 }
 
 function formatDateTime(value) {
