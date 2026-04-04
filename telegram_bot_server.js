@@ -1,4 +1,4 @@
-import { vastaiShowInstances } from './lib/vastai.js';
+import { vastaiManageInstance, vastaiShowInstances } from './lib/vastai.js';
 import 'dotenv/config';
 
 import TelegramBot from 'node-telegram-bot-api';
@@ -43,7 +43,15 @@ bot.on('message', async (msg) => {
 
   rememberChat(chatId);
 
-  if (text === '/start') {
+  const instanceCommandMatch = text.match(/^\/instance(?:@\w+)?\s+(start|stop)\s+#?(\d+)$/i);
+  if (instanceCommandMatch) {
+    const action = instanceCommandMatch[1].toLowerCase();
+    const state = action === 'start' ? 'running' : 'stopped';
+    await handleInstanceStateCommand(chatId, instanceCommandMatch[2], state);
+    return;
+  }
+
+  if (text === '/start' || /^\/start(?:@\w+)?$/.test(text)) {
     await bot.sendMessage(chatId, 'Hi!\n\nType /help to see available commands.');
     return;
   }
@@ -93,6 +101,36 @@ bot.on('callback_query', async (query) => {
   rememberChat(chatId);
   await bot.answerCallbackQuery(callbackId, { text: `Unknown action: ${data}` });
 });
+
+async function handleInstanceStateCommand(chatId, instanceId, state) {
+  const actionLabel = state === 'running' ? 'start' : 'stop';
+  const progressLabel = state === 'running' ? 'Starting' : 'Stopping';
+  const cachedInstance = findInstanceById(instanceId);
+
+  await bot.sendMessage(chatId, `${progressLabel} instance #${instanceId}...`);
+
+  const result = await vastaiManageInstance(instanceId, state);
+  const success = result?.success === true;
+
+  if (!success) {
+    const errorText = extractApiError(result) || `Failed to ${actionLabel} instance #${instanceId}.`;
+    await bot.sendMessage(chatId, errorText);
+    return;
+  }
+
+  await refreshInstanceCache();
+
+  const updatedInstance = findInstanceById(instanceId) || cachedInstance;
+  const instanceTitle = updatedInstance ? buildInstanceTitle(updatedInstance) : `#${instanceId}`;
+  const statusText = updatedInstance ? getDisplayStatus(updatedInstance) : (state === 'running' ? 'Starting' : 'Stopped');
+  const verbPast = state === 'running' ? 'start requested' : 'stop requested';
+
+  await bot.sendMessage(
+    chatId,
+    `${instanceTitle} ${verbPast}. Current group: ${statusText}`,
+    { parse_mode: 'Markdown' }
+  );
+}
 
 async function refreshInstanceCache() {
   const previousInstances = instanceCache.instances;
@@ -182,11 +220,10 @@ function buildHelpMessage() {
     '/help - show this help message',
     '/status - show current bot settings',
     '/list - show current Vast.ai instances from bot memory',
+    '/instance start #id - start a stopped Vast.ai instance',
+    '/instance stop #id - stop a Vast.ai instance without deleting it',
     '',
     '/search - search for offers on Vast AI (to be implemented)',
-    '',
-    'Usage:',
-    ' - to be written...'
   ].join('\n');
 }
 
@@ -258,27 +295,28 @@ function buildInstancesMessage(cache) {
 }
 
 function buildStatusChangeMessage(instance, previousStatus, currentStatus) {
-  const id = instance.id ?? 'unknown';
-  const label = escapeMarkdown(instance.label || instance.template_name || instance.gpu_name || 'Unnamed instance');
-  const countryFlag = getCountryFlag(instance.country_code);
-
   return [
     '*Instance status changed*',
-    `${countryFlag} #${id} ${label}`,
+    buildInstanceTitle(instance),
     `_${escapeMarkdown(previousStatus)} -> ${escapeMarkdown(currentStatus)}_`,
   ].join('\n');
 }
 
-function formatInstanceLines(instance) {
+function buildInstanceTitle(instance) {
   const id = instance.id ?? 'unknown';
   const label = escapeMarkdown(instance.label || instance.template_name || instance.gpu_name || 'Unnamed instance');
+  const countryFlag = getCountryFlag(instance.country_code);
+
+  return `${countryFlag} #${id} ${label}`;
+}
+
+function formatInstanceLines(instance) {
   const host = escapeMarkdown(instance.public_ipaddr || instance.ssh_host || 'n/a');
   const displayStatus = escapeMarkdown(getDisplayStatus(instance));
   const gpuName = escapeMarkdown(instance.gpu_name || 'unknown');
-  const countryFlag = getCountryFlag(instance.country_code);
 
   return [
-    `${countryFlag} #${id} ${label}`,
+    buildInstanceTitle(instance),
     `Status: ${displayStatus}`,
     `GPU: ${gpuName} x${instance.num_gpus ?? '?'}`,
     `Host: ${host}`,
@@ -360,6 +398,18 @@ function getDisplayStatus(instance) {
   }
 
   return actualStatus || currentState || intendedStatus || nextState || 'Offline';
+}
+
+function findInstanceById(instanceId) {
+  return instanceCache.instances.find((instance) => String(instance.id) === String(instanceId)) || null;
+}
+
+function extractApiError(result) {
+  if (!result || typeof result !== 'object') {
+    return '';
+  }
+
+  return result.msg || result.error || result.detail || '';
 }
 
 function getCountryFlag(countryCode) {
