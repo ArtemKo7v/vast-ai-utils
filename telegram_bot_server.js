@@ -144,7 +144,7 @@ async function refreshInstanceCache() {
     instanceCache.lastError = null;
 
     if (hadPreviousSnapshot) {
-      await notifyStatusChanges(previousInstances, instanceCache.instances);
+      await notifyInstanceChanges(previousInstances, instanceCache.instances);
     }
   } catch (error) {
     instanceCache.lastError = error instanceof Error ? error.message : String(error);
@@ -152,30 +152,38 @@ async function refreshInstanceCache() {
   }
 }
 
-async function notifyStatusChanges(previousInstances, currentInstances) {
+async function notifyInstanceChanges(previousInstances, currentInstances) {
   if (subscribedChatIds.size === 0) {
     return;
   }
 
   const previousById = new Map(previousInstances.map((instance) => [String(instance.id), instance]));
+  const currentById = new Map(currentInstances.map((instance) => [String(instance.id), instance]));
 
   for (const instance of currentInstances) {
     const instanceId = String(instance.id ?? '');
     const previousInstance = previousById.get(instanceId);
 
     if (!previousInstance) {
+      await broadcastMessage(buildInstanceAddedMessage(instance), { parse_mode: 'Markdown' });
       continue;
     }
 
     const previousStatus = getDisplayStatus(previousInstance);
     const currentStatus = getDisplayStatus(instance);
 
-    if (previousStatus === currentStatus) {
-      continue;
+    if (previousStatus !== currentStatus) {
+      const message = buildStatusChangeMessage(instance, previousStatus, currentStatus);
+      await broadcastMessage(message, { parse_mode: 'Markdown' });
     }
+  }
 
-    const message = buildStatusChangeMessage(instance, previousStatus, currentStatus);
-    await broadcastMessage(message, { parse_mode: 'Markdown' });
+  for (const instance of previousInstances) {
+    const instanceId = String(instance.id ?? '');
+
+    if (!currentById.has(instanceId)) {
+      await broadcastMessage(buildInstanceDeletedMessage(instance), { parse_mode: 'Markdown' });
+    }
   }
 }
 
@@ -302,6 +310,22 @@ function buildStatusChangeMessage(instance, previousStatus, currentStatus) {
   ].join('\n');
 }
 
+function buildInstanceAddedMessage(instance) {
+  return [
+    '*Instance was added*',
+    buildInstanceTitle(instance),
+    `_Status: ${escapeMarkdown(getDisplayStatus(instance))}_`,
+  ].join('\n');
+}
+
+function buildInstanceDeletedMessage(instance) {
+  return [
+    '*Instance was deleted*',
+    buildInstanceTitle(instance),
+    `_Last known status: ${escapeMarkdown(getDisplayStatus(instance))}_`,
+  ].join('\n');
+}
+
 function buildInstanceTitle(instance) {
   const id = instance.id ?? 'unknown';
   const label = escapeMarkdown(instance.label || instance.template_name || instance.gpu_name || 'Unnamed instance');
@@ -358,12 +382,32 @@ function getDisplayStatus(instance) {
   const nextStateLower = nextState.toLowerCase();
   const statusMessageLower = statusMessage.toLowerCase();
 
-  if (actualStatusLower === 'running' || currentStateLower === 'running') {
+  if (actualStatusLower === 'running') {
+    return 'Running';
+  }
+
+  if (actualStatusLower === 'exited') {
+    if (statusMessageLower.includes('failed') || statusMessageLower.includes('error')) {
+      return 'Error';
+    }
+
+    return 'Stopped';
+  }
+
+  if (actualStatusLower === 'created') {
+    return 'Starting';
+  }
+
+  if (actualStatusLower === 'offline') {
+    return 'Offline';
+  }
+
+  if (currentStateLower === 'running') {
     return 'Running';
   }
 
   if (
-    (currentStateLower === 'stopped' || intendedStatusLower === 'stopped' || nextStateLower === 'stopped' || actualStatusLower === 'exited') &&
+    (currentStateLower === 'stopped' || intendedStatusLower === 'stopped' || nextStateLower === 'stopped') &&
     (statusMessageLower.includes('failed') || statusMessageLower.includes('error'))
   ) {
     return 'Error';
@@ -374,8 +418,7 @@ function getDisplayStatus(instance) {
     currentStateLower === 'starting' ||
     currentStateLower === 'restarting' ||
     intendedStatusLower === 'running' ||
-    nextStateLower === 'running' ||
-    actualStatusLower === 'created'
+    nextStateLower === 'running'
   ) {
     return 'Starting';
   }
@@ -383,17 +426,12 @@ function getDisplayStatus(instance) {
   if (
     currentStateLower === 'stopped' ||
     intendedStatusLower === 'stopped' ||
-    nextStateLower === 'stopped' ||
-    actualStatusLower === 'exited'
+    nextStateLower === 'stopped'
   ) {
     return 'Stopped';
   }
 
-  if (
-    currentStateLower === 'offline' ||
-    actualStatusLower === 'offline' ||
-    nextStateLower === 'offline'
-  ) {
+  if (currentStateLower === 'offline' || nextStateLower === 'offline') {
     return 'Offline';
   }
 
@@ -435,3 +473,5 @@ function formatDateTime(value) {
 function escapeMarkdown(value) {
   return String(value).replace(/([_*`\[])/g, '\\$1');
 }
+
+
