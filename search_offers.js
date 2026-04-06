@@ -11,7 +11,7 @@ async function main() {
     verified: { eq: true },
 
     num_gpus: { eq: 1 },
-    cpu_ram: { gt: 60000 }
+    cpu_ram: { gt: 60000 },
     gpu_ram: { gt: 20000 }
   };
 
