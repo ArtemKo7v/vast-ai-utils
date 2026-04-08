@@ -6,7 +6,7 @@ import TelegramBot from 'node-telegram-bot-api';
 const BOT_TOKEN = process.env.BOT_TOKEN || 'PUT_YOUR_TELEGRAM_BOT_TOKEN_HERE';
 const ALLOWED_TELEGRAM_USER_IDS = parseAllowedUserIds(process.env.ALLOWED_TELEGRAM_USER_IDS || '');
 const INSTANCE_REFRESH_INTERVAL_MS = 2 * 60 * 1000;
-const BALANCE_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
+const CREDIT_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 const DISPLAY_TIME_ZONE = 'Europe/Paris';
 
 const instanceCache = {
@@ -172,7 +172,7 @@ async function refreshBalanceCache() {
     const nextBalance = Number(user?.credit);
 
     if (!Number.isFinite(nextBalance)) {
-      balanceCache.lastError = 'Balance is missing in Vast.ai response.';
+      balanceCache.lastError = 'Credit is missing in Vast.ai response.';
       return;
     }
 
@@ -248,7 +248,7 @@ setInterval(() => {
 }, INSTANCE_REFRESH_INTERVAL_MS);
 setInterval(() => {
   void refreshBalanceCache();
-}, BALANCE_REFRESH_INTERVAL_MS);
+}, CREDIT_REFRESH_INTERVAL_MS);
 
 function rememberChat(chatId) {
   subscribedChatIds.add(chatId);
@@ -274,7 +274,7 @@ function buildHelpMessage() {
   return [
     'Available commands:',
     '/help - show this help message',
-    '/status - show current bot settings and balance',
+    '/status - show current bot settings and credit',
     '/list - show current Vast.ai instances from bot memory',
     '/instance start #id - start a stopped Vast.ai instance',
     '/instance stop #id - stop a Vast.ai instance without deleting it',
@@ -290,7 +290,7 @@ function buildStatusMessage() {
     ? `instances cached: ${instanceCache.instances.length}, updated at ${formatDateTime(instanceCache.lastUpdatedAt)}`
     : 'instance cache is not initialized yet';
   const subscribedChatsStatus = `notification chats: ${subscribedChatIds.size}`;
-  const balanceStatus = buildBalanceStatusLine();
+  const creditStatus = buildCreditStatusLine();
 
   return [
     'Bot status',
@@ -299,27 +299,27 @@ function buildStatusMessage() {
     'Vast AI Status:',
     apiStatus,
     instanceCacheStatus,
-    balanceStatus,
+    creditStatus,
     subscribedChatsStatus
   ].join('\n');
 }
 
-function buildBalanceStatusLine() {
+function buildCreditStatusLine() {
   if (balanceCache.lastUpdatedAt === null || balanceCache.balance === null) {
-    return 'balance cache is not initialized yet';
+    return 'credit cache is not initialized yet';
   }
 
   const parts = [
-    `balance: $${formatUsd(balanceCache.balance)}`,
+    `credit: $${formatMoney(balanceCache.balance)}`,
     `updated at ${formatDateTime(balanceCache.lastUpdatedAt)}`,
   ];
 
   if (balanceCache.burnRatePerHour !== null) {
-    parts.push(`approx spend: ${formatUsdPerHour(balanceCache.burnRatePerHour)}`);
+    parts.push(`approx spend: ${formatMoneyPerHour(balanceCache.burnRatePerHour)}`);
   }
 
   if (balanceCache.lastError) {
-    parts.push(`last balance error: ${balanceCache.lastError}`);
+    parts.push(`last credit error: ${balanceCache.lastError}`);
   }
 
   return parts.join(', ');
@@ -552,15 +552,19 @@ function formatDateTime(value) {
   }).format(value);
 }
 
-function formatUsd(value) {
-  return Number(value).toFixed(4);
+function formatMoney(value) {
+  return Number(value).toFixed(2).replace(/\.?0+$/, '');
 }
 
-function formatUsdPerHour(value) {
+function formatMoneyPerHour(value) {
   const sign = value >= 0 ? '$' : '-$';
-  return `${sign}${Math.abs(value).toFixed(4)}/h`;
+  return `${sign}${formatMoney(Math.abs(value))}/h`;
 }
 
 function escapeMarkdown(value) {
   return String(value).replace(/([_*`\[])/g, '\\$1');
 }
+
+
+
+
