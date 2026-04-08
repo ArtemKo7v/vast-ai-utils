@@ -1,4 +1,4 @@
-import { vastaiManageInstance, vastaiShowInstances } from './lib/vastai.js';
+import { vastaiManageInstance, vastaiShowCurrentUser, vastaiShowInstances } from './lib/vastai.js';
 import 'dotenv/config';
 
 import TelegramBot from 'node-telegram-bot-api';
@@ -6,11 +6,21 @@ import TelegramBot from 'node-telegram-bot-api';
 const BOT_TOKEN = process.env.BOT_TOKEN || 'PUT_YOUR_TELEGRAM_BOT_TOKEN_HERE';
 const ALLOWED_TELEGRAM_USER_IDS = parseAllowedUserIds(process.env.ALLOWED_TELEGRAM_USER_IDS || '');
 const INSTANCE_REFRESH_INTERVAL_MS = 2 * 60 * 1000;
+const BALANCE_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 const DISPLAY_TIME_ZONE = 'Europe/Paris';
 
 const instanceCache = {
   instances: [],
   lastUpdatedAt: null,
+  lastError: null,
+};
+
+const balanceCache = {
+  balance: null,
+  previousBalance: null,
+  lastUpdatedAt: null,
+  previousUpdatedAt: null,
+  burnRatePerHour: null,
   lastError: null,
 };
 
@@ -62,6 +72,10 @@ bot.on('message', async (msg) => {
   }
 
   if (text === '/status') {
+    if (!balanceCache.lastUpdatedAt) {
+      await refreshBalanceCache();
+    }
+
     await bot.sendMessage(chatId, buildStatusMessage());
     return;
   }
@@ -152,6 +166,36 @@ async function refreshInstanceCache() {
   }
 }
 
+async function refreshBalanceCache() {
+  try {
+    const user = await vastaiShowCurrentUser();
+    const nextBalance = Number(user?.balance);
+
+    if (!Number.isFinite(nextBalance)) {
+      balanceCache.lastError = 'Balance is missing in Vast.ai response.';
+      return;
+    }
+
+    if (balanceCache.lastUpdatedAt !== null && balanceCache.balance !== null) {
+      balanceCache.previousBalance = balanceCache.balance;
+      balanceCache.previousUpdatedAt = balanceCache.lastUpdatedAt;
+      balanceCache.burnRatePerHour = calculateBurnRatePerHour(
+        balanceCache.previousBalance,
+        nextBalance,
+        balanceCache.previousUpdatedAt,
+        new Date()
+      );
+    }
+
+    balanceCache.balance = nextBalance;
+    balanceCache.lastUpdatedAt = new Date();
+    balanceCache.lastError = null;
+  } catch (error) {
+    balanceCache.lastError = error instanceof Error ? error.message : String(error);
+    console.error('Failed to refresh balance cache:', error);
+  }
+}
+
 async function notifyInstanceChanges(previousInstances, currentInstances) {
   if (subscribedChatIds.size === 0) {
     return;
@@ -198,9 +242,13 @@ async function broadcastMessage(text, options = {}) {
 }
 
 void refreshInstanceCache();
+void refreshBalanceCache();
 setInterval(() => {
   void refreshInstanceCache();
 }, INSTANCE_REFRESH_INTERVAL_MS);
+setInterval(() => {
+  void refreshBalanceCache();
+}, BALANCE_REFRESH_INTERVAL_MS);
 
 function rememberChat(chatId) {
   subscribedChatIds.add(chatId);
@@ -226,7 +274,7 @@ function buildHelpMessage() {
   return [
     'Available commands:',
     '/help - show this help message',
-    '/status - show current bot settings',
+    '/status - show current bot settings and balance',
     '/list - show current Vast.ai instances from bot memory',
     '/instance start #id - start a stopped Vast.ai instance',
     '/instance stop #id - stop a Vast.ai instance without deleting it',
@@ -238,10 +286,11 @@ function buildHelpMessage() {
 function buildStatusMessage() {
   const whitelistStatus = ALLOWED_TELEGRAM_USER_IDS.size > 0 ? `${ALLOWED_TELEGRAM_USER_IDS.size} allowed user(s)` : 'empty (no users allowed)';
   const apiStatus = process.env.VAST_API_KEY ? 'API configured via VAST_API_KEY' : 'VAST_API_KEY is not configured';
-  const cacheStatus = instanceCache.lastUpdatedAt
+  const instanceCacheStatus = instanceCache.lastUpdatedAt
     ? `instances cached: ${instanceCache.instances.length}, updated at ${formatDateTime(instanceCache.lastUpdatedAt)}`
     : 'instance cache is not initialized yet';
   const subscribedChatsStatus = `notification chats: ${subscribedChatIds.size}`;
+  const balanceStatus = buildBalanceStatusLine();
 
   return [
     'Bot status',
@@ -249,9 +298,31 @@ function buildStatusMessage() {
     '',
     'Vast AI Status:',
     apiStatus,
-    cacheStatus,
+    instanceCacheStatus,
+    balanceStatus,
     subscribedChatsStatus
   ].join('\n');
+}
+
+function buildBalanceStatusLine() {
+  if (balanceCache.lastUpdatedAt === null || balanceCache.balance === null) {
+    return 'balance cache is not initialized yet';
+  }
+
+  const parts = [
+    `balance: $${formatUsd(balanceCache.balance)}`,
+    `updated at ${formatDateTime(balanceCache.lastUpdatedAt)}`,
+  ];
+
+  if (balanceCache.burnRatePerHour !== null) {
+    parts.push(`approx spend: ${formatUsdPerHour(balanceCache.burnRatePerHour)}`);
+  }
+
+  if (balanceCache.lastError) {
+    parts.push(`last balance error: ${balanceCache.lastError}`);
+  }
+
+  return parts.join(', ');
 }
 
 function buildInstancesMessage(cache) {
@@ -450,6 +521,17 @@ function extractApiError(result) {
   return result.msg || result.error || result.detail || '';
 }
 
+function calculateBurnRatePerHour(previousBalance, currentBalance, previousUpdatedAt, currentUpdatedAt) {
+  const elapsedMs = currentUpdatedAt.getTime() - previousUpdatedAt.getTime();
+
+  if (elapsedMs <= 0) {
+    return null;
+  }
+
+  const elapsedHours = elapsedMs / (60 * 60 * 1000);
+  return (previousBalance - currentBalance) / elapsedHours;
+}
+
 function getCountryFlag(countryCode) {
   const normalizedCode = String(countryCode || '').trim().toUpperCase();
 
@@ -470,8 +552,15 @@ function formatDateTime(value) {
   }).format(value);
 }
 
+function formatUsd(value) {
+  return Number(value).toFixed(4);
+}
+
+function formatUsdPerHour(value) {
+  const sign = value >= 0 ? '$' : '-$';
+  return `${sign}${Math.abs(value).toFixed(4)}/h`;
+}
+
 function escapeMarkdown(value) {
   return String(value).replace(/([_*`\[])/g, '\\$1');
 }
-
-
