@@ -169,7 +169,7 @@ async function refreshInstanceCache() {
 async function refreshBalanceCache() {
   try {
     const user = await vastaiShowCurrentUser();
-    const nextBalance = Number(user?.balance);
+    const nextBalance = Number(user?.credit);
 
     if (!Number.isFinite(nextBalance)) {
       balanceCache.lastError = 'Balance is missing in Vast.ai response.';
