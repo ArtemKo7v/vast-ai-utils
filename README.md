@@ -7,22 +7,25 @@ A small Node.js utility for monitoring and controlling your Vast.ai instances fr
 - View current Vast.ai instances with `/list`
 - Group instances by status: `Running`, `Error`, `Starting`, `Stopped`, `Offline`
 - See country flags, GPU type, host, and last cache refresh time
-- Track balance in `/status`
+- Track credit in `/status`
 - Estimate approximate spend rate in `$ / h`
 - Start and stop instances with Telegram commands
 - Receive notifications when:
   - an instance changes status group
   - a new instance appears
   - an instance disappears
+  - credit is topped up
+  - credit falls below a configured threshold
 
 ## Commands
 
 - `/start` - bot greeting
 - `/help` - show available commands
-- `/status` - show bot status, cache state, and current balance
+- `/status` - show bot status, cache state, current credit, and spend rate
 - `/list` - show cached Vast.ai instances
 - `/instance start #id` - request instance start
 - `/instance stop #id` - request instance stop without deleting the instance
+- `/threshold 5` - set low-credit warning threshold
 
 ## Requirements
 
@@ -62,7 +65,7 @@ node telegram_bot_server.js
 ## Notes
 
 - Instance list is refreshed every 2 minutes
-- Balance is refreshed every 15 minutes
+- Credit is refreshed every 15 minutes
 - Notifications are sent only to chats where an allowed user has already interacted with the bot after startup
 - Status grouping prefers `actual_status` from Vast.ai response data
 
