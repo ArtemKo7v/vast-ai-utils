@@ -347,14 +347,16 @@ function buildStatusMessage() {
   const whitelistStatus = ALLOWED_TELEGRAM_USER_IDS.size > 0 ? `${ALLOWED_TELEGRAM_USER_IDS.size} allowed user(s)` : 'empty (no users allowed)';
   const apiStatus = process.env.VAST_API_KEY ? 'API configured via VAST_API_KEY' : 'VAST_API_KEY is not configured';
   const instanceCacheStatus = instanceCache.lastUpdatedAt
-    ? `instances cached: ${instanceCache.instances.length}, updated at ${formatDateTime(instanceCache.lastUpdatedAt)}`
+    ? `instances cached: ${instanceCache.instances.length}`
     : 'instance cache is not initialized yet';
   const subscribedChatsStatus = `notification chats: ${subscribedChatIds.size}`;
   const creditStatus = buildCreditStatusLine();
   const creditThresholdStatus = `low credit threshold: $${formatMoney(creditAlertConfig.lowCreditThreshold)}`;
+  const statusUpdatedAt = getStatusUpdatedAt();
+  const title = statusUpdatedAt ? `Bot status (updated at ${formatDateTime(statusUpdatedAt)})` : 'Bot status';
 
   return [
-    'Bot status',
+    title,
     `Access whitelist: ${whitelistStatus}`,
     '',
     'Vast AI Status:',
@@ -373,7 +375,6 @@ function buildCreditStatusLine() {
 
   const parts = [
     `credit: $${formatMoney(balanceCache.balance)}`,
-    `updated at ${formatDateTime(balanceCache.lastUpdatedAt)}`,
   ];
 
   if (balanceCache.burnRatePerHour !== null) {
@@ -610,6 +611,16 @@ function calculateBurnRatePerHour(previousBalance, currentBalance, previousUpdat
   return (previousBalance - currentBalance) / elapsedHours;
 }
 
+function getStatusUpdatedAt() {
+  const timestamps = [instanceCache.lastUpdatedAt, balanceCache.lastUpdatedAt].filter(Boolean);
+
+  if (timestamps.length === 0) {
+    return null;
+  }
+
+  return new Date(Math.max(...timestamps.map((value) => value.getTime())));
+}
+
 function formatTopUpAmount(delta) {
   const rounded = Math.round(delta);
 
@@ -655,3 +666,4 @@ function formatMoneyPerHour(value) {
 function escapeMarkdown(value) {
   return String(value).replace(/([_*`\[])/g, '\\$1');
 }
+
