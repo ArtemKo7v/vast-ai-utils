@@ -7,6 +7,7 @@ const BOT_TOKEN = process.env.BOT_TOKEN || 'PUT_YOUR_TELEGRAM_BOT_TOKEN_HERE';
 const ALLOWED_TELEGRAM_USER_IDS = parseAllowedUserIds(process.env.ALLOWED_TELEGRAM_USER_IDS || '');
 const INSTANCE_REFRESH_INTERVAL_MS = 2 * 60 * 1000;
 const CREDIT_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
+const DEFAULT_LOW_CREDIT_THRESHOLD = 5;
 const DISPLAY_TIME_ZONE = 'Europe/Paris';
 
 const instanceCache = {
@@ -22,6 +23,11 @@ const balanceCache = {
   previousUpdatedAt: null,
   burnRatePerHour: null,
   lastError: null,
+};
+
+const creditAlertConfig = {
+  lowCreditThreshold: DEFAULT_LOW_CREDIT_THRESHOLD,
+  lowCreditAlertSent: false,
 };
 
 const subscribedChatIds = new Set();
@@ -58,6 +64,12 @@ bot.on('message', async (msg) => {
     const action = instanceCommandMatch[1].toLowerCase();
     const state = action === 'start' ? 'running' : 'stopped';
     await handleInstanceStateCommand(chatId, instanceCommandMatch[2], state);
+    return;
+  }
+
+  const thresholdCommandMatch = text.match(/^\/threshold(?:@\w+)?\s+([0-9]+(?:[\.,][0-9]+)?)$/i);
+  if (thresholdCommandMatch) {
+    await handleThresholdCommand(chatId, thresholdCommandMatch[1]);
     return;
   }
 
@@ -146,6 +158,26 @@ async function handleInstanceStateCommand(chatId, instanceId, state) {
   );
 }
 
+async function handleThresholdCommand(chatId, rawValue) {
+  const parsedValue = Number(rawValue.replace(',', '.'));
+
+  if (!Number.isFinite(parsedValue) || parsedValue < 0) {
+    await bot.sendMessage(chatId, 'Threshold must be a non-negative number. Example: /threshold 5');
+    return;
+  }
+
+  creditAlertConfig.lowCreditThreshold = parsedValue;
+
+  if (balanceCache.balance !== null && balanceCache.balance >= parsedValue) {
+    creditAlertConfig.lowCreditAlertSent = false;
+  }
+
+  await bot.sendMessage(
+    chatId,
+    `Low credit threshold set to $${formatMoney(parsedValue)}.`
+  );
+}
+
 async function refreshInstanceCache() {
   const previousInstances = instanceCache.instances;
   const hadPreviousSnapshot = instanceCache.lastUpdatedAt !== null;
@@ -176,23 +208,50 @@ async function refreshBalanceCache() {
       return;
     }
 
-    if (balanceCache.lastUpdatedAt !== null && balanceCache.balance !== null) {
-      balanceCache.previousBalance = balanceCache.balance;
-      balanceCache.previousUpdatedAt = balanceCache.lastUpdatedAt;
+    const nextUpdatedAt = new Date();
+    const hadPreviousSnapshot = balanceCache.lastUpdatedAt !== null && balanceCache.balance !== null;
+    const previousBalance = balanceCache.balance;
+    const previousUpdatedAt = balanceCache.lastUpdatedAt;
+
+    if (hadPreviousSnapshot) {
+      balanceCache.previousBalance = previousBalance;
+      balanceCache.previousUpdatedAt = previousUpdatedAt;
       balanceCache.burnRatePerHour = calculateBurnRatePerHour(
-        balanceCache.previousBalance,
+        previousBalance,
         nextBalance,
-        balanceCache.previousUpdatedAt,
-        new Date()
+        previousUpdatedAt,
+        nextUpdatedAt
       );
     }
 
     balanceCache.balance = nextBalance;
-    balanceCache.lastUpdatedAt = new Date();
+    balanceCache.lastUpdatedAt = nextUpdatedAt;
     balanceCache.lastError = null;
+
+    if (hadPreviousSnapshot) {
+      await notifyCreditChanges(previousBalance, nextBalance);
+    }
   } catch (error) {
     balanceCache.lastError = error instanceof Error ? error.message : String(error);
     console.error('Failed to refresh balance cache:', error);
+  }
+}
+
+async function notifyCreditChanges(previousBalance, currentBalance) {
+  if (currentBalance > previousBalance) {
+    await broadcastMessage(buildCreditTopUpMessage(currentBalance - previousBalance), { parse_mode: 'Markdown' });
+  }
+
+  const threshold = creditAlertConfig.lowCreditThreshold;
+
+  if (currentBalance >= threshold) {
+    creditAlertConfig.lowCreditAlertSent = false;
+    return;
+  }
+
+  if (!creditAlertConfig.lowCreditAlertSent) {
+    creditAlertConfig.lowCreditAlertSent = true;
+    await broadcastMessage(buildLowCreditMessage(currentBalance, threshold), { parse_mode: 'Markdown' });
   }
 }
 
@@ -278,6 +337,7 @@ function buildHelpMessage() {
     '/list - show current Vast.ai instances from bot memory',
     '/instance start #id - start a stopped Vast.ai instance',
     '/instance stop #id - stop a Vast.ai instance without deleting it',
+    '/threshold 5 - set low credit warning threshold',
     '',
     '/search - search for offers on Vast AI (to be implemented)',
   ].join('\n');
@@ -291,6 +351,7 @@ function buildStatusMessage() {
     : 'instance cache is not initialized yet';
   const subscribedChatsStatus = `notification chats: ${subscribedChatIds.size}`;
   const creditStatus = buildCreditStatusLine();
+  const creditThresholdStatus = `low credit threshold: $${formatMoney(creditAlertConfig.lowCreditThreshold)}`;
 
   return [
     'Bot status',
@@ -300,6 +361,7 @@ function buildStatusMessage() {
     apiStatus,
     instanceCacheStatus,
     creditStatus,
+    creditThresholdStatus,
     subscribedChatsStatus
   ].join('\n');
 }
@@ -394,6 +456,22 @@ function buildInstanceDeletedMessage(instance) {
     '*Instance was deleted*',
     buildInstanceTitle(instance),
     `_Last known status: ${escapeMarkdown(getDisplayStatus(instance))}_`,
+  ].join('\n');
+}
+
+function buildCreditTopUpMessage(delta) {
+  return [
+    '*Credit was topped up*',
+    `Amount: ${escapeMarkdown(formatTopUpAmount(delta))}`,
+    `Current credit: $${escapeMarkdown(formatMoney(balanceCache.balance ?? 0))}`,
+  ].join('\n');
+}
+
+function buildLowCreditMessage(currentBalance, threshold) {
+  return [
+    '*Low credit warning*',
+    `Current credit: $${escapeMarkdown(formatMoney(currentBalance))}`,
+    `Threshold: $${escapeMarkdown(formatMoney(threshold))}`,
   ].join('\n');
 }
 
@@ -532,6 +610,19 @@ function calculateBurnRatePerHour(previousBalance, currentBalance, previousUpdat
   return (previousBalance - currentBalance) / elapsedHours;
 }
 
+function formatTopUpAmount(delta) {
+  const rounded = Math.round(delta);
+
+  if (rounded !== 0) {
+    const relativeDifference = Math.abs(delta - rounded) / Math.abs(delta);
+    if (relativeDifference < 0.1) {
+      return `$${rounded}`;
+    }
+  }
+
+  return `$${formatMoney(delta)}`;
+}
+
 function getCountryFlag(countryCode) {
   const normalizedCode = String(countryCode || '').trim().toUpperCase();
 
@@ -564,7 +655,3 @@ function formatMoneyPerHour(value) {
 function escapeMarkdown(value) {
   return String(value).replace(/([_*`\[])/g, '\\$1');
 }
-
-
-
-
