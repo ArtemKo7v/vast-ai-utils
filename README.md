@@ -25,7 +25,7 @@ A small Node.js utility for monitoring and controlling your Vast.ai instances fr
 - `/list` - show cached Vast.ai instances
 - `/instance start #id` - request instance start
 - `/instance stop #id` - request instance stop without deleting the instance
-- `/threshold 5` - set low-credit warning threshold
+- `/threshold N` - set low-credit warning threshold
 
 ## Requirements
 
