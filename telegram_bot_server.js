@@ -88,7 +88,9 @@ bot.on('message', async (msg) => {
       await refreshBalanceCache();
     }
 
-    await bot.sendMessage(chatId, buildStatusMessage());
+    await bot.sendMessage(chatId, buildStatusMessage(), {
+      parse_mode: 'Markdown'
+    });
     return;
   }
 
@@ -353,13 +355,14 @@ function buildStatusMessage() {
   const creditStatus = buildCreditStatusLine();
   const creditThresholdStatus = `low credit threshold: $${formatMoney(creditAlertConfig.lowCreditThreshold)}`;
   const statusUpdatedAt = getStatusUpdatedAt();
-  const title = statusUpdatedAt ? `Bot status (updated at ${formatDateTime(statusUpdatedAt)})` : 'Bot status';
+  const updatedAtLine = statusUpdatedAt ? `updated at ${formatDateTime(statusUpdatedAt)}` : 'updated at n/a';
 
   return [
-    title,
+    '*Bot status*',
     `Access whitelist: ${whitelistStatus}`,
     '',
-    'Vast AI Status:',
+    '*VastAI status*',
+    updatedAtLine,
     apiStatus,
     instanceCacheStatus,
     creditStatus,
@@ -666,4 +669,6 @@ function formatMoneyPerHour(value) {
 function escapeMarkdown(value) {
   return String(value).replace(/([_*`\[])/g, '\\$1');
 }
+
+
 
