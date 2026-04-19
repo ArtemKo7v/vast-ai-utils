@@ -10,6 +10,7 @@ A small Node.js utility for monitoring and controlling your Vast.ai instances fr
 - Track credit in `/status`
 - Estimate approximate spend rate in `$ / h`
 - Start and stop instances with Telegram commands
+- Enable or disable all notifications, only status notifications, or only balance notifications
 - Receive notifications when:
   - an instance changes status group
   - a new instance appears
@@ -26,6 +27,10 @@ A small Node.js utility for monitoring and controlling your Vast.ai instances fr
 - `/instance start #id` - request instance start
 - `/instance stop #id` - request instance stop without deleting the instance
 - `/threshold N` - set low-credit warning threshold
+- `/notifications` - show current notification settings
+- `/notifications all on|off` - enable or disable all notifications
+- `/notifications status on|off` - enable or disable instance status notifications
+- `/notifications balance on|off` - enable or disable credit notifications
 
 ## Requirements
 
@@ -68,6 +73,7 @@ node telegram_bot_server.js
 - Credit is refreshed every 15 minutes
 - Notifications are sent only to chats where an allowed user has already interacted with the bot after startup
 - Status grouping prefers `actual_status` from Vast.ai response data
+- Notification settings are kept in memory and reset after bot restart
 
 ## Project Scope
 

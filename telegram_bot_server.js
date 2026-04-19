@@ -30,6 +30,12 @@ const creditAlertConfig = {
   lowCreditAlertSent: false,
 };
 
+const notificationSettings = {
+  all: true,
+  status: true,
+  balance: true,
+};
+
 const subscribedChatIds = new Set();
 
 if (!BOT_TOKEN || BOT_TOKEN.includes('PUT_YOUR')) {
@@ -70,6 +76,12 @@ bot.on('message', async (msg) => {
   const thresholdCommandMatch = text.match(/^\/threshold(?:@\w+)?\s+([0-9]+(?:[\.,][0-9]+)?)$/i);
   if (thresholdCommandMatch) {
     await handleThresholdCommand(chatId, thresholdCommandMatch[1]);
+    return;
+  }
+
+  const notificationsCommandMatch = text.match(/^\/notifications(?:@\w+)?(?:\s+(all|status|balance)\s+(on|off))?$/i);
+  if (notificationsCommandMatch) {
+    await handleNotificationsCommand(chatId, notificationsCommandMatch[1], notificationsCommandMatch[2]);
     return;
   }
 
@@ -180,6 +192,29 @@ async function handleThresholdCommand(chatId, rawValue) {
   );
 }
 
+async function handleNotificationsCommand(chatId, scope, mode) {
+  if (!scope || !mode) {
+    await bot.sendMessage(chatId, buildNotificationsStatusMessage());
+    return;
+  }
+
+  const enabled = mode.toLowerCase() === 'on';
+  const normalizedScope = scope.toLowerCase();
+
+  if (normalizedScope === 'all') {
+    notificationSettings.all = enabled;
+  } else if (normalizedScope === 'status') {
+    notificationSettings.status = enabled;
+  } else if (normalizedScope === 'balance') {
+    notificationSettings.balance = enabled;
+  }
+
+  await bot.sendMessage(
+    chatId,
+    `${capitalize(normalizedScope)} notifications turned ${enabled ? 'on' : 'off'}.\n\n${buildNotificationsStatusMessage()}`
+  );
+}
+
 async function refreshInstanceCache() {
   const previousInstances = instanceCache.instances;
   const hadPreviousSnapshot = instanceCache.lastUpdatedAt !== null;
@@ -240,6 +275,10 @@ async function refreshBalanceCache() {
 }
 
 async function notifyCreditChanges(previousBalance, currentBalance) {
+  if (!isNotificationEnabled('balance')) {
+    return;
+  }
+
   if (currentBalance > previousBalance) {
     await broadcastMessage(buildCreditTopUpMessage(currentBalance - previousBalance), { parse_mode: 'Markdown' });
   }
@@ -258,7 +297,7 @@ async function notifyCreditChanges(previousBalance, currentBalance) {
 }
 
 async function notifyInstanceChanges(previousInstances, currentInstances) {
-  if (subscribedChatIds.size === 0) {
+  if (!isNotificationEnabled('status')) {
     return;
   }
 
@@ -293,6 +332,10 @@ async function notifyInstanceChanges(previousInstances, currentInstances) {
 }
 
 async function broadcastMessage(text, options = {}) {
+  if (subscribedChatIds.size === 0) {
+    return;
+  }
+
   for (const chatId of subscribedChatIds) {
     try {
       await bot.sendMessage(chatId, text, options);
@@ -331,6 +374,10 @@ function isUserAllowed(userId) {
   return ALLOWED_TELEGRAM_USER_IDS.has(String(userId));
 }
 
+function isNotificationEnabled(kind) {
+  return notificationSettings.all && notificationSettings[kind];
+}
+
 function buildHelpMessage() {
   return [
     'Available commands:',
@@ -340,6 +387,10 @@ function buildHelpMessage() {
     '/instance start #id - start a stopped Vast.ai instance',
     '/instance stop #id - stop a Vast.ai instance without deleting it',
     '/threshold 5 - set low credit warning threshold',
+    '/notifications - show notification settings',
+    '/notifications all on|off - enable or disable all notifications',
+    '/notifications status on|off - enable or disable status notifications',
+    '/notifications balance on|off - enable or disable balance notifications',
     '',
     '/search - search for offers on Vast AI (to be implemented)',
   ].join('\n');
@@ -354,6 +405,7 @@ function buildStatusMessage() {
   const subscribedChatsStatus = `notification chats: ${subscribedChatIds.size}`;
   const creditStatus = buildCreditStatusLine();
   const creditThresholdStatus = `low credit threshold: $${formatMoney(creditAlertConfig.lowCreditThreshold)}`;
+  const notificationsStatus = `notifications: all=${formatOnOff(notificationSettings.all)}, status=${formatOnOff(notificationSettings.status)}, balance=${formatOnOff(notificationSettings.balance)}`;
   const statusUpdatedAt = getStatusUpdatedAt();
   const updatedAtLine = statusUpdatedAt ? `updated at ${formatDateTime(statusUpdatedAt)}` : 'updated at n/a';
 
@@ -367,7 +419,17 @@ function buildStatusMessage() {
     instanceCacheStatus,
     creditStatus,
     creditThresholdStatus,
+    notificationsStatus,
     subscribedChatsStatus
+  ].join('\n');
+}
+
+function buildNotificationsStatusMessage() {
+  return [
+    'Notification settings:',
+    `all: ${formatOnOff(notificationSettings.all)}`,
+    `status: ${formatOnOff(notificationSettings.status)}`,
+    `balance: ${formatOnOff(notificationSettings.balance)}`,
   ].join('\n');
 }
 
@@ -666,9 +728,14 @@ function formatMoneyPerHour(value) {
   return `${sign}${formatMoney(Math.abs(value))}/h`;
 }
 
+function formatOnOff(value) {
+  return value ? 'on' : 'off';
+}
+
+function capitalize(value) {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
 function escapeMarkdown(value) {
   return String(value).replace(/([_*`\[])/g, '\\$1');
 }
-
-
-
