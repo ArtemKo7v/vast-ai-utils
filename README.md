@@ -8,6 +8,7 @@ A small Node.js utility for monitoring and controlling your Vast.ai instances fr
 - Group instances by status: `Running`, `Error`, `Starting`, `Stopped`, `Offline`
 - See country flags, GPU type, host, and last cache refresh time
 - Track credit in `/status`
+- Keep available Vast.ai offers cached in memory and show the loaded offer count in `/status`
 - Estimate approximate spend rate in `$ / h`
 - Start and stop instances with Telegram commands
 - Enable or disable all notifications, only status notifications, or only balance notifications
@@ -22,7 +23,7 @@ A small Node.js utility for monitoring and controlling your Vast.ai instances fr
 
 - `/start` - bot greeting
 - `/help` - show available commands
-- `/status` - show bot status, cache state, current credit, and spend rate
+- `/status` - show bot status, cache state, loaded offer count, current credit, and spend rate
 - `/list` - show cached Vast.ai instances
 - `/instance start #id` - request instance start
 - `/instance stop #id` - request instance stop without deleting the instance
@@ -59,7 +60,17 @@ copy .env.example .env
 VAST_API_KEY=your_vast_api_key
 BOT_TOKEN=your_telegram_bot_token
 ALLOWED_TELEGRAM_USER_IDS=123456789
+OFFERS_REFRESH_INTERVAL_MINUTES=10
+OFFERS_SEARCH_LIMIT=10000
+OFFERS_SEARCH_TYPE=on-demand
 ```
+
+Optional offer-cache settings:
+
+- `OFFERS_REFRESH_INTERVAL_MINUTES` - offer refresh interval in minutes, default `10`
+- `OFFERS_REFRESH_INTERVAL_MS` - offer refresh interval in milliseconds; takes precedence over minutes
+- `OFFERS_SEARCH_LIMIT` - number of available offers to request from Vast.ai, default `10000`
+- `OFFERS_SEARCH_TYPE` - Vast.ai offer type, default `on-demand`
 
 ## Run
 
@@ -71,6 +82,7 @@ node telegram_bot_server.js
 
 - Instance list is refreshed every 2 minutes
 - Credit is refreshed every 15 minutes
+- Available offers are refreshed every 10 minutes by default
 - Notifications are sent only to chats where an allowed user has already interacted with the bot after startup
 - Status grouping prefers `actual_status` from Vast.ai response data
 - Notification settings are kept in memory and reset after bot restart

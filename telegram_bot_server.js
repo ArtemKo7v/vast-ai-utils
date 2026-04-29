@@ -1,4 +1,4 @@
-import { vastaiManageInstance, vastaiShowCurrentUser, vastaiShowInstances } from './lib/vastai.js';
+import { vastaiManageInstance, vastaiSearchOffers, vastaiShowCurrentUser, vastaiShowInstances } from './lib/vastai.js';
 import 'dotenv/config';
 
 import TelegramBot from 'node-telegram-bot-api';
@@ -7,6 +7,13 @@ const BOT_TOKEN = process.env.BOT_TOKEN || 'PUT_YOUR_TELEGRAM_BOT_TOKEN_HERE';
 const ALLOWED_TELEGRAM_USER_IDS = parseAllowedUserIds(process.env.ALLOWED_TELEGRAM_USER_IDS || '');
 const INSTANCE_REFRESH_INTERVAL_MS = 2 * 60 * 1000;
 const CREDIT_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
+const DEFAULT_OFFERS_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
+const OFFERS_REFRESH_INTERVAL_MS = parseRefreshIntervalMs(
+  process.env.OFFERS_REFRESH_INTERVAL_MS,
+  process.env.OFFERS_REFRESH_INTERVAL_MINUTES,
+  DEFAULT_OFFERS_REFRESH_INTERVAL_MS
+);
+const OFFERS_SEARCH_LIMIT = parsePositiveInteger(process.env.OFFERS_SEARCH_LIMIT, 10000);
 const DEFAULT_LOW_CREDIT_THRESHOLD = 5;
 const DISPLAY_TIME_ZONE = 'Europe/Paris';
 
@@ -22,6 +29,12 @@ const balanceCache = {
   lastUpdatedAt: null,
   previousUpdatedAt: null,
   burnRatePerHour: null,
+  lastError: null,
+};
+
+const offersCache = {
+  offers: [],
+  lastUpdatedAt: null,
   lastError: null,
 };
 
@@ -274,6 +287,19 @@ async function refreshBalanceCache() {
   }
 }
 
+async function refreshOffersCache() {
+  try {
+    const offers = await vastaiSearchOffers(buildOffersSearchParams());
+
+    offersCache.offers = Array.isArray(offers) ? offers : [];
+    offersCache.lastUpdatedAt = new Date();
+    offersCache.lastError = null;
+  } catch (error) {
+    offersCache.lastError = error instanceof Error ? error.message : String(error);
+    console.error('Failed to refresh offers cache:', error);
+  }
+}
+
 async function notifyCreditChanges(previousBalance, currentBalance) {
   if (!isNotificationEnabled('balance')) {
     return;
@@ -347,12 +373,16 @@ async function broadcastMessage(text, options = {}) {
 
 void refreshInstanceCache();
 void refreshBalanceCache();
+void refreshOffersCache();
 setInterval(() => {
   void refreshInstanceCache();
 }, INSTANCE_REFRESH_INTERVAL_MS);
 setInterval(() => {
   void refreshBalanceCache();
 }, CREDIT_REFRESH_INTERVAL_MS);
+setInterval(() => {
+  void refreshOffersCache();
+}, OFFERS_REFRESH_INTERVAL_MS);
 
 function rememberChat(chatId) {
   subscribedChatIds.add(chatId);
@@ -402,6 +432,7 @@ function buildStatusMessage() {
   const instanceCacheStatus = instanceCache.lastUpdatedAt
     ? `instances cached: ${instanceCache.instances.length}`
     : 'instance cache is not initialized yet';
+  const offersCacheStatus = buildOffersCacheStatusLine();
   const subscribedChatsStatus = `notification chats: ${subscribedChatIds.size}`;
   const creditStatus = buildCreditStatusLine();
   const creditThresholdStatus = `low credit threshold: $${formatMoney(creditAlertConfig.lowCreditThreshold)}`;
@@ -417,11 +448,29 @@ function buildStatusMessage() {
     updatedAtLine,
     apiStatus,
     instanceCacheStatus,
+    offersCacheStatus,
     creditStatus,
     creditThresholdStatus,
     notificationsStatus,
     subscribedChatsStatus
   ].join('\n');
+}
+
+function buildOffersCacheStatusLine() {
+  if (!offersCache.lastUpdatedAt) {
+    return 'offers cache is not initialized yet';
+  }
+
+  const parts = [
+    `offers cached: ${offersCache.offers.length}`,
+    `offers refreshed: ${formatDateTime(offersCache.lastUpdatedAt)}`,
+  ];
+
+  if (offersCache.lastError) {
+    parts.push(`last offers error: ${offersCache.lastError}`);
+  }
+
+  return parts.join(', ');
 }
 
 function buildNotificationsStatusMessage() {
@@ -677,7 +726,11 @@ function calculateBurnRatePerHour(previousBalance, currentBalance, previousUpdat
 }
 
 function getStatusUpdatedAt() {
-  const timestamps = [instanceCache.lastUpdatedAt, balanceCache.lastUpdatedAt].filter(Boolean);
+  const timestamps = [
+    instanceCache.lastUpdatedAt,
+    balanceCache.lastUpdatedAt,
+    offersCache.lastUpdatedAt,
+  ].filter(Boolean);
 
   if (timestamps.length === 0) {
     return null;
@@ -734,6 +787,55 @@ function formatOnOff(value) {
 
 function capitalize(value) {
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function buildOffersSearchParams() {
+  return {
+    limit: OFFERS_SEARCH_LIMIT,
+    type: process.env.OFFERS_SEARCH_TYPE || 'on-demand',
+    rentable: { eq: true },
+    rented: { eq: false },
+  };
+}
+
+function parseRefreshIntervalMs(rawMs, rawMinutes, fallbackMs) {
+  const parsedMs = parsePositiveInteger(rawMs, null);
+  if (parsedMs !== null) {
+    return parsedMs;
+  }
+
+  const parsedMinutes = parsePositiveNumber(rawMinutes, null);
+  if (parsedMinutes !== null) {
+    return Math.round(parsedMinutes * 60 * 1000);
+  }
+
+  return fallbackMs;
+}
+
+function parsePositiveInteger(value, fallback) {
+  if (value === undefined || value === null || value === '') {
+    return fallback;
+  }
+
+  const parsedValue = Number(value);
+  if (!Number.isInteger(parsedValue) || parsedValue <= 0) {
+    return fallback;
+  }
+
+  return parsedValue;
+}
+
+function parsePositiveNumber(value, fallback) {
+  if (value === undefined || value === null || value === '') {
+    return fallback;
+  }
+
+  const parsedValue = Number(value);
+  if (!Number.isFinite(parsedValue) || parsedValue <= 0) {
+    return fallback;
+  }
+
+  return parsedValue;
 }
 
 function escapeMarkdown(value) {
